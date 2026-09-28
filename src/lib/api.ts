@@ -94,9 +94,21 @@ export interface CreateSessionRequest {
   enable_file_carving: boolean;
   enable_duplicate_detection: boolean;
   enable_forensic_hashing: boolean;
+  deleted_after: number | null;   // Unix timestamp seconds
+  deleted_before: number | null;  // Unix timestamp seconds
+  filter_prefix: string | null;
+}
+
+/**
+ * Helper type representing a date-range timeline filter.
+ * `deleted_after` and `deleted_before` are Unix timestamp seconds (or null for open-ended).
+ */
+export interface TimelineFilter {
+  enabled: boolean;
   deleted_after: number | null;
   deleted_before: number | null;
-  filter_prefix: string | null;
+  /** Human-readable summary, e.g. "Last 30 days" */
+  label: string;
 }
 
 export interface CommonLocation {

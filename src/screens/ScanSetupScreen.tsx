@@ -3,6 +3,48 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api, formatBytes } from "../lib/api";
 import type { CommonLocation, CreateSessionRequest, DeviceInfo } from "../lib/api";
 
+// ── Timeline helpers ──────────────────────────────────────────────────────────
+
+/** Returns a date string in "YYYY-MM-DD" format, offset by `daysAgo` from today. */
+function dateDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Today in "YYYY-MM-DD". */
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Convert "YYYY-MM-DD" → Unix seconds (start of day UTC). Returns null for empty. */
+function dateToUnix(s: string): number | null {
+  if (!s) return null;
+  return Math.floor(new Date(s + "T00:00:00Z").getTime() / 1000);
+}
+
+/** Convert "YYYY-MM-DD" → Unix seconds (end of day UTC). Returns null for empty. */
+function dateToUnixEod(s: string): number | null {
+  if (!s) return null;
+  return Math.floor(new Date(s + "T23:59:59Z").getTime() / 1000);
+}
+
+interface TimelinePreset {
+  id: string;
+  label: string;
+  fromDate: string;
+  toDate: string;
+}
+
+const PRESETS: TimelinePreset[] = [
+  { id: "24h",    label: "Last 24 h",  fromDate: dateDaysAgo(1),   toDate: todayStr() },
+  { id: "7d",     label: "Last 7 d",   fromDate: dateDaysAgo(7),   toDate: todayStr() },
+  { id: "30d",    label: "Last 30 d",  fromDate: dateDaysAgo(30),  toDate: todayStr() },
+  { id: "90d",    label: "Last 3 mo",  fromDate: dateDaysAgo(90),  toDate: todayStr() },
+  { id: "1y",     label: "Last year",  fromDate: dateDaysAgo(365), toDate: todayStr() },
+  { id: "custom", label: "Custom",     fromDate: "",               toDate: "" },
+];
+
 interface LocationState {
   device?: DeviceInfo;
   mode?: "quick" | "deep" | "file_carving";
@@ -72,6 +114,20 @@ export function ScanSetupScreen() {
   // Step 2 — Mode
   const [mode, setMode] = useState<string>(locState.mode ?? "quick");
 
+  // Step 3 — Timeline filter
+  const [timelineEnabled, setTimelineEnabled] = useState(false);
+  const [activePreset, setActivePreset] = useState<string>("30d");
+  const [fromDate, setFromDate] = useState<string>(dateDaysAgo(30));
+  const [toDate, setToDate] = useState<string>(todayStr());
+
+  const handlePreset = (preset: TimelinePreset) => {
+    setActivePreset(preset.id);
+    if (preset.id !== "custom") {
+      setFromDate(preset.fromDate);
+      setToDate(preset.toDate);
+    }
+  };
+
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,6 +162,10 @@ export function ScanSetupScreen() {
       setError("Please select a source location or enter a path.");
       return;
     }
+    if (timelineEnabled && fromDate && toDate && fromDate > toDate) {
+      setError('"From" date must be earlier than the "To" date.');
+      return;
+    }
     setCreating(true);
     setError(null);
 
@@ -116,8 +176,8 @@ export function ScanSetupScreen() {
         sector_size: sourceDevice?.sector_size ?? 512,
         scan_mode: mode,
         ...selectedMode.config,
-        deleted_after: null,
-        deleted_before: null,
+        deleted_after: timelineEnabled ? dateToUnix(fromDate) : null,
+        deleted_before: timelineEnabled ? dateToUnixEod(toDate) : null,
         filter_prefix: null,
       };
 
@@ -280,12 +340,179 @@ export function ScanSetupScreen() {
         </p>
       </div>
 
+      {/* ── STEP 3: Timeline Filter ── */}
+      <div className="card" style={{ marginBottom: "24px" }}>
+        {/* Header row with toggle */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: timelineEnabled ? "20px" : "0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <h3 style={{ margin: 0 }}>③ Timeline Filter</h3>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", background: "var(--bg-primary)", padding: "2px 8px", borderRadius: "12px", border: "1px solid var(--border)" }}>
+              optional
+            </span>
+          </div>
+          {/* Toggle switch */}
+          <button
+            onClick={() => setTimelineEnabled((v) => !v)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: timelineEnabled ? "var(--accent-blue)" : "var(--text-muted)",
+              fontWeight: 600,
+              fontSize: "0.875rem",
+              padding: "4px 0",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                width: "40px",
+                height: "22px",
+                borderRadius: "11px",
+                background: timelineEnabled ? "var(--accent-blue)" : "var(--border)",
+                position: "relative",
+                transition: "background 0.2s",
+                flexShrink: 0,
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: "3px",
+                  left: timelineEnabled ? "21px" : "3px",
+                  width: "16px",
+                  height: "16px",
+                  borderRadius: "50%",
+                  background: "#fff",
+                  transition: "left 0.2s",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                }}
+              />
+            </span>
+            {timelineEnabled ? "Enabled" : "Disabled"}
+          </button>
+        </div>
+
+        {!timelineEnabled && (
+          <p style={{ fontSize: "0.8125rem", color: "var(--text-muted)", margin: 0 }}>
+            Scan all files regardless of deletion date. Enable to restrict the scan to a specific date range.
+          </p>
+        )}
+
+        {timelineEnabled && (
+          <>
+            <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", marginBottom: "16px", lineHeight: 1.5 }}>
+              Only recover files deleted within this date range. Useful for pinpointing a recent accidental deletion.
+            </p>
+
+            {/* Preset shortcuts */}
+            <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Quick Presets
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "20px" }}>
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => handlePreset(preset)}
+                  style={{
+                    padding: "6px 14px",
+                    background: activePreset === preset.id ? "var(--accent-blue)" : "var(--bg-primary)",
+                    border: `1px solid ${activePreset === preset.id ? "var(--accent-blue)" : "var(--border)"}`,
+                    borderRadius: "20px",
+                    color: activePreset === preset.id ? "#fff" : "var(--text-secondary)",
+                    cursor: "pointer",
+                    fontSize: "0.8125rem",
+                    fontWeight: 500,
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Date pickers */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  From (deleted after)
+                </label>
+                <input
+                  className="form-input"
+                  type="date"
+                  value={fromDate}
+                  max={toDate || todayStr()}
+                  onChange={(e) => {
+                    setFromDate(e.target.value);
+                    setActivePreset("custom");
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  To (deleted before)
+                </label>
+                <input
+                  className="form-input"
+                  type="date"
+                  value={toDate}
+                  min={fromDate}
+                  max={todayStr()}
+                  onChange={(e) => {
+                    setToDate(e.target.value);
+                    setActivePreset("custom");
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </div>
+
+            {/* Summary pill */}
+            {(fromDate || toDate) && (
+              <div style={{
+                marginTop: "14px",
+                padding: "10px 14px",
+                background: "rgba(59,130,246,0.08)",
+                border: "1px solid rgba(59,130,246,0.25)",
+                borderRadius: "8px",
+                fontSize: "0.8125rem",
+                color: "var(--accent-blue)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}>
+                <span>📅</span>
+                <span>
+                  Scanning for files deleted
+                  {fromDate && toDate
+                    ? ` between ${fromDate} and ${toDate}`
+                    : fromDate
+                    ? ` after ${fromDate}`
+                    : ` before ${toDate}`}
+                </span>
+              </div>
+            )}
+
+            {/* Validation warning */}
+            {fromDate && toDate && fromDate > toDate && (
+              <div className="alert alert-error" style={{ marginTop: "10px" }}>
+                "From" date must be earlier than "To" date.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* Actions */}
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
         <button
           className="btn btn-primary btn-lg"
           onClick={handleStart}
-          disabled={creating || !sourcePath.trim()}
+          disabled={creating || !sourcePath.trim() || (timelineEnabled && !!fromDate && !!toDate && fromDate > toDate)}
         >
           {creating ? "Starting…" : `▶ Start ${selectedMode.label}`}
         </button>
@@ -295,6 +522,9 @@ export function ScanSetupScreen() {
         {sourcePath && (
           <span style={{ fontSize: "0.8125rem", color: "var(--text-muted)", marginLeft: "auto" }}>
             {sourceLabel || sourcePath} · {selectedMode.label}
+            {timelineEnabled && (fromDate || toDate) && (
+              <> · 📅 {fromDate || "…"} → {toDate || "…"}</>
+            )}
           </span>
         )}
       </div>
